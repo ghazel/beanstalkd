@@ -35,7 +35,8 @@ static void
 grow(ms a)
 {
     void **nitems;
-    size_t ncap = (a->cap << 1) ? : 1;
+    size_t cap = (a->cap << 1);
+    size_t ncap = cap ? cap : 1;
 
     nitems = malloc(ncap * sizeof(void *));
     if (!nitems) return;

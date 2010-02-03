@@ -126,7 +126,10 @@ static void
 binlog_dref(binlog b)
 {
     if (!b) return;
-    if (b->refs < 1) return twarnx("refs is zero for binlog: %s", b->path);
+    if (b->refs < 1) {
+        twarnx("refs is zero for binlog: %s", b->path);
+        return;
+    }
 
     --b->refs;
     if (b->refs < 1) {
@@ -162,35 +165,49 @@ binlog_read_log_file(binlog b, job binlog_jobs)
     int version;
 
     r = read(b->fd, &version, sizeof(version));
-    if (r == -1) return twarn("read()");
+    if (r == -1) {
+        twarn("read()");
+        return;
+    }
     if (r < sizeof(version)) {
-        return binlog_warn(b, "EOF while reading version record");
+        binlog_warn(b, "EOF while reading version record");
+        return;
     }
 
     if (version != binlog_version) {
-        return warnx("%s: binlog version mismatch %d %d", b->path, version,
+        warnx("%s: binlog version mismatch %d %d", b->path, version,
                      binlog_version);
+        return;
     }
 
     while (read(b->fd, &namelen, sizeof(size_t)) == sizeof(size_t)) {
         if (namelen >= MAX_TUBE_NAME_LEN) {
-            return binlog_warn(b, "namelen %d exceeds maximum of %d", namelen, MAX_TUBE_NAME_LEN - 1);
+            binlog_warn(b, "namelen %d exceeds maximum of %d", namelen, MAX_TUBE_NAME_LEN - 1);
+            return;
         }
 
         if (namelen > 0) {
             r = read(b->fd, tubename, namelen);
-            if (r == -1) return twarn("read()");
+            if (r == -1) {
+                twarn("read()");
+                return;
+            }
             if (r < namelen) {
                 lseek(b->fd, SEEK_CUR, 0);
-                return binlog_warn(b, "EOF while reading tube name");
+                binlog_warn(b, "EOF while reading tube name");
+                return;
             }
         }
 
         tubename[namelen] = '\0';
         r = read(b->fd, &js, job_record_size);
-        if (r == -1) return twarn("read()");
+        if (r == -1) {
+            twarn("read()");
+            return;
+        }
         if (r < job_record_size) {
-          return binlog_warn(b, "EOF while reading job record");
+          binlog_warn(b, "EOF while reading job record");
+          return;
         }
 
         if (!js.id) break;
@@ -222,16 +239,21 @@ binlog_read_log_file(binlog b, job binlog_jobs)
                     job_remove(j);
                     binlog_dref(j->binlog);
                     job_free(j);
-                    return binlog_warn(b, "EOF while reading job body");
+                    binlog_warn(b, "EOF while reading job body");
+                    return;
                 }
                 r = read(b->fd, j->body, js.body_size);
-                if (r == -1) return twarn("read()");
+                if (r == -1) {
+                    twarn("read()");
+                    return;
+                }
                 if (r < js.body_size) {
                     warnx("dropping incomplete job %llu", j->id);
                     job_remove(j);
                     binlog_dref(j->binlog);
                     job_free(j);
-                    return binlog_warn(b, "EOF while reading job body");
+                    binlog_warn(b, "EOF while reading job body");
+                    return;
                 }
             }
             break;
@@ -353,7 +375,10 @@ binlog_open(binlog log, size_t *written)
 
     fd = open(log->path, O_WRONLY | O_CREAT, 0400);
 
-    if (fd < 0) return twarn("Cannot open binlog %s", log->path);
+    if (fd < 0) {
+        twarn("Cannot open binlog %s", log->path);
+        return;
+    }
 
 #ifdef HAVE_POSIX_FALLOCATE
     {
@@ -378,7 +403,8 @@ binlog_open(binlog log, size_t *written)
             close(fd);
             binlog_dref(log);
             errno = r;
-            return twarn("Cannot allocate space for binlog %s", log->path);
+            twarn("Cannot allocate space for binlog %s", log->path);
+            return;
         }
     }
 #endif
@@ -716,7 +742,10 @@ binlog_init(job binlog_jobs)
     /* Recover any jobs in old binlogs */
 
     if (stat(binlog_dir, &sbuf) < 0) {
-        if (mkdir(binlog_dir, 0700) < 0) return twarn("%s", binlog_dir);
+        if (mkdir(binlog_dir, 0700) < 0) {
+            twarn("%s", binlog_dir);
+            return;
+        }
     } else if (!(sbuf.st_mode & S_IFDIR)) {
         twarnx("%s", binlog_dir);
         return;
@@ -727,7 +756,10 @@ binlog_init(job binlog_jobs)
     if (binlog_index_min) {
         for (idx = binlog_index_min; idx <= binlog_index; idx++) {
             r = snprintf(path, PATH_MAX, "%s/binlog.%d", binlog_dir, idx);
-            if (r > PATH_MAX) return twarnx("path too long: %s", binlog_dir);
+            if (r > PATH_MAX) {
+                twarnx("path too long: %s", binlog_dir);
+                return;
+            }
 
             fd = open(path, O_RDONLY);
 
@@ -748,7 +780,10 @@ binlog_init(job binlog_jobs)
 
     /* Set up for writing out new jobs */
     n = ensure_free_space(1);
-    if (!n) return twarnx("error making first writable binlog");
+    if (!n) {
+        twarnx("error making first writable binlog");
+        return;
+    }
 
     current_binlog = newest_binlog;
 }

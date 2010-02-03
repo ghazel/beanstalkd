@@ -37,7 +37,8 @@ static unsigned int tot_conn_ct = 0;
 static conn
 conn_alloc()
 {
-    return conn_remove(pool.next) ? : malloc(sizeof(struct conn));
+    conn x = conn_remove(pool.next);
+    return x ? x : malloc(sizeof(struct conn));
 }
 
 static void
@@ -226,7 +227,7 @@ soonest_job(conn c)
 
     if (soonest == NULL) {
         for (j = c->reserved_jobs.next; j != &c->reserved_jobs; j = j->next) {
-            if (j->deadline_at <= (soonest ? : j)->deadline_at) soonest = j;
+            if (j->deadline_at <= (soonest ? soonest : j)->deadline_at) soonest = j;
         }
     }
     c->soonest_job = soonest;

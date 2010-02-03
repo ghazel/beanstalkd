@@ -68,7 +68,10 @@ void
 tube_dref(tube t)
 {
     if (!t) return;
-    if (t->refs < 1) return twarnx("refs is zero for tube: %s", t->name);
+    if (t->refs < 1) {
+        twarnx("refs is zero for tube: %s", t->name);
+        return;
+    }
 
     --t->refs;
     if (t->refs < 1) tube_free(t);
@@ -114,6 +117,7 @@ tube_find(const char *name)
 tube
 tube_find_or_make(const char *name)
 {
-    return tube_find(name) ? : make_and_insert_tube(name);
+    tube t = tube_find(name);
+    return t ? t : make_and_insert_tube(name);
 }
 

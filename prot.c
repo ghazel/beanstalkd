@@ -283,7 +283,11 @@ reply(conn c, const char *line, int len, int state)
     if (!c) return;
 
     r = conn_update_evq(c, EV_WRITE | EV_PERSIST);
-    if (r == -1) return twarnx("conn_update_evq() failed"), conn_close(c);
+    if (r == -1) {
+        twarnx("conn_update_evq() failed");
+        conn_close(c);
+        return;
+    }
 
     c->reply = line;
     c->reply_len = len;
@@ -308,9 +312,12 @@ reply_line(conn c, int state, const char *fmt, ...)
     va_end(ap);
 
     /* Make sure the buffer was big enough. If not, we have a bug. */
-    if (r >= LINE_BUF_SIZE) return reply_serr(c, MSG_INTERNAL_ERROR);
+    if (r >= LINE_BUF_SIZE) {
+        reply_serr(c, MSG_INTERNAL_ERROR);
+        return;
+    }
 
-    return reply(c, c->reply_buf, r, state);
+    reply(c, c->reply_buf, r, state);
 }
 
 static void
@@ -320,7 +327,7 @@ reply_job(conn c, job j, const char *word)
     c->out_job = j;
     c->out_job_sent = 0;
 
-    return reply_line(c, STATE_SENDJOB, "%s %llu %u\r\n",
+    reply_line(c, STATE_SENDJOB, "%s %llu %u\r\n",
                       word, j->id, j->body_size - 2);
 }
 
@@ -356,7 +363,7 @@ reserve_job(conn c, job j)
     if (c->soonest_job && j->deadline_at < c->soonest_job->deadline_at) {
         c->soonest_job = j;
     }
-    return reply_job(c, j, MSG_RESERVED);
+    reply_job(c, j, MSG_RESERVED);
 }
 
 static job
@@ -792,27 +799,41 @@ enqueue_incoming_job(conn c)
     /* check if the trailer is present and correct */
     if (memcmp(j->body + j->body_size - 2, "\r\n", 2)) {
         job_free(j);
-        return reply_msg(c, MSG_EXPECTED_CRLF);
+        reply_msg(c, MSG_EXPECTED_CRLF);
+        return;
     }
 
     if (drain_mode) {
         job_free(j);
-        return reply_serr(c, MSG_DRAINING);
+        reply_serr(c, MSG_DRAINING);
+        return;
     }
 
-    if (j->reserved_binlog_space) return reply_serr(c, MSG_INTERNAL_ERROR);
+    if (j->reserved_binlog_space) {
+        reply_serr(c, MSG_INTERNAL_ERROR);
+        return;
+    }
     j->reserved_binlog_space = binlog_reserve_space_put(j);
-    if (!j->reserved_binlog_space) return reply_serr(c, MSG_OUT_OF_MEMORY);
+    if (!j->reserved_binlog_space) {
+        reply_serr(c, MSG_OUT_OF_MEMORY);
+        return;
+    }
 
     /* we have a complete job, so let's stick it in the pqueue */
     r = enqueue_job(j, j->delay, 1);
-    if (r < 0) return reply_serr(c, MSG_INTERNAL_ERROR);
+    if (r < 0) {
+        reply_serr(c, MSG_INTERNAL_ERROR);
+        return;
+    }
 
     op_ct[OP_PUT]++; /* stats */
     global_stat.total_jobs_ct++;
     j->tube->stat.total_jobs_ct++;
 
-    if (r == 1) return reply_line(c, STATE_SENDWORD, MSG_INSERTED_FMT, j->id);
+    if (r == 1) {
+        reply_line(c, STATE_SENDWORD, MSG_INSERTED_FMT, j->id);
+        return;
+    }
 
     /* out of memory trying to grow the queue, so it gets buried */
     bury_job(j, 0);
@@ -955,7 +976,11 @@ wait_for_job(conn c, int timeout)
 
     /* this conn is waiting, but we want to know if they hang up */
     r = conn_update_evq(c, EV_READ | EV_PERSIST);
-    if (r == -1) return twarnx("update events failed"), conn_close(c);
+    if (r == -1) {
+        twarnx("update events failed");
+        conn_close(c);
+        return;
+    }
 }
 
 typedef int(*fmt_fn)(char *, size_t, void *);
@@ -969,7 +994,10 @@ do_stats(conn c, fmt_fn fmt, void *data)
     stats_len = fmt(NULL, 0, data) + 16;
 
     c->out_job = allocate_job(stats_len); /* fake job to hold stats data */
-    if (!c->out_job) return reply_serr(c, MSG_OUT_OF_MEMORY);
+    if (!c->out_job) {
+        reply_serr(c, MSG_OUT_OF_MEMORY);
+        return;
+    }
 
     /* Mark this job as a copy so it can be appropriately freed later on */
     c->out_job->state = JOB_STATE_COPY;
@@ -978,7 +1006,10 @@ do_stats(conn c, fmt_fn fmt, void *data)
     r = fmt(c->out_job->body, stats_len, data);
     /* and set the actual body size */
     c->out_job->body_size = r;
-    if (r > stats_len) return reply_serr(c, MSG_INTERNAL_ERROR);
+    if (r > stats_len) {
+        reply_serr(c, MSG_INTERNAL_ERROR);
+        return;
+    }
 
     c->out_job_sent = 0;
     return reply_line(c, STATE_SENDJOB, "OK %d\r\n", r - 2);
@@ -999,7 +1030,10 @@ do_list_tubes(conn c, ms l)
     }
 
     c->out_job = allocate_job(resp_z); /* fake job to hold response data */
-    if (!c->out_job) return reply_serr(c, MSG_OUT_OF_MEMORY);
+    if (!c->out_job) {
+        reply_serr(c, MSG_OUT_OF_MEMORY);
+        return;
+    }
 
     /* now actually format the response */
     buf = c->out_job->body;
@@ -1012,7 +1046,7 @@ do_list_tubes(conn c, ms l)
     buf[1] = '\n';
 
     c->out_job_sent = 0;
-    return reply_line(c, STATE_SENDJOB, "OK %d\r\n", resp_z - 2);
+    reply_line(c, STATE_SENDJOB, "OK %d\r\n", resp_z - 2);
 }
 
 static int
@@ -1090,7 +1124,10 @@ maybe_enqueue_incoming_job(conn c)
     job j = c->in_job;
 
     /* do we have a complete job? */
-    if (c->in_job_read == j->body_size) return enqueue_incoming_job(c);
+    if (c->in_job_read == j->body_size) {
+        enqueue_incoming_job(c);
+        return;
+    }
 
     /* otherwise we have incomplete data, so just keep waiting */
     c->state = STATE_WANTDATA;
@@ -1150,7 +1187,8 @@ dispatch_cmd(conn c)
 
     /* check for possible maliciousness */
     if (strlen(c->cmd) != c->cmd_len - 2) {
-        return reply_msg(c, MSG_BAD_FORMAT);
+        reply_msg(c, MSG_BAD_FORMAT);
+        return;
     }
 
     type = which_cmd(c);
@@ -1159,28 +1197,44 @@ dispatch_cmd(conn c)
     switch (type) {
     case OP_PUT:
         r = read_pri(&pri, c->cmd + 4, &delay_buf);
-        if (r) return reply_msg(c, MSG_BAD_FORMAT);
+        if (r) {
+            reply_msg(c, MSG_BAD_FORMAT);
+            return;
+        }
 
         r = read_delay(&delay, delay_buf, &ttr_buf);
-        if (r) return reply_msg(c, MSG_BAD_FORMAT);
+        if (r) {
+            reply_msg(c, MSG_BAD_FORMAT);
+            return;
+        }
 
         r = read_ttr(&ttr, ttr_buf, &size_buf);
-        if (r) return reply_msg(c, MSG_BAD_FORMAT);
+        if (r) {
+            reply_msg(c, MSG_BAD_FORMAT);
+            return;
+        }
 
         errno = 0;
         body_size = strtoul(size_buf, &end_buf, 10);
-        if (errno) return reply_msg(c, MSG_BAD_FORMAT);
+        if (errno) {
+            reply_msg(c, MSG_BAD_FORMAT);
+            return;
+        }
 
         if (body_size > job_data_size_limit) {
-            return reply_msg(c, MSG_JOB_TOO_BIG);
+            reply_msg(c, MSG_JOB_TOO_BIG);
+            return;
         }
 
         /* don't allow trailing garbage */
-        if (end_buf[0] != '\0') return reply_msg(c, MSG_BAD_FORMAT);
+        if (end_buf[0] != '\0') {
+            reply_msg(c, MSG_BAD_FORMAT);
+            return;
+        }
 
         conn_set_producer(c);
 
-        c->in_job = make_job(pri, delay, ttr ? : 1, body_size + 2, c->use);
+        c->in_job = make_job(pri, delay, ttr ? ttr : 1, body_size + 2, c->use);
 
         /* OOM? */
         if (!c->in_job) {
@@ -1191,7 +1245,10 @@ dispatch_cmd(conn c)
             c->in_job_read = body_size + 2;
             fill_extra_data(c);
 
-            if (c->in_job_read == 0) return reply_serr(c, MSG_OUT_OF_MEMORY);
+            if (c->in_job_read == 0) {
+                reply_serr(c, MSG_OUT_OF_MEMORY);
+                return;
+            }
 
             c->state = STATE_BITBUCKET;
             return;
@@ -1206,46 +1263,61 @@ dispatch_cmd(conn c)
     case OP_PEEK_READY:
         /* don't allow trailing garbage */
         if (c->cmd_len != CMD_PEEK_READY_LEN + 2) {
-            return reply_msg(c, MSG_BAD_FORMAT);
+            reply_msg(c, MSG_BAD_FORMAT);
+            return;
         }
         op_ct[type]++;
 
         j = job_copy(pq_peek(&c->use->ready));
 
-        if (!j) return reply(c, MSG_NOTFOUND, MSG_NOTFOUND_LEN, STATE_SENDWORD);
+        if (!j) {
+            reply(c, MSG_NOTFOUND, MSG_NOTFOUND_LEN, STATE_SENDWORD);
+            return;
+        }
 
         reply_job(c, j, MSG_FOUND);
         break;
     case OP_PEEK_DELAYED:
         /* don't allow trailing garbage */
         if (c->cmd_len != CMD_PEEK_DELAYED_LEN + 2) {
-            return reply_msg(c, MSG_BAD_FORMAT);
+            reply_msg(c, MSG_BAD_FORMAT);
+            return;
         }
         op_ct[type]++;
 
         j = job_copy(pq_peek(&c->use->delay));
 
-        if (!j) return reply(c, MSG_NOTFOUND, MSG_NOTFOUND_LEN, STATE_SENDWORD);
+        if (!j) {
+            reply(c, MSG_NOTFOUND, MSG_NOTFOUND_LEN, STATE_SENDWORD);
+            return;
+        }
 
         reply_job(c, j, MSG_FOUND);
         break;
     case OP_PEEK_BURIED:
         /* don't allow trailing garbage */
         if (c->cmd_len != CMD_PEEK_BURIED_LEN + 2) {
-            return reply_msg(c, MSG_BAD_FORMAT);
+            reply_msg(c, MSG_BAD_FORMAT);
+            return;
         }
         op_ct[type]++;
 
         j = job_copy(buried_job_p(c->use)? j = c->use->buried.next : NULL);
 
-        if (!j) return reply(c, MSG_NOTFOUND, MSG_NOTFOUND_LEN, STATE_SENDWORD);
+        if (!j) {
+            reply(c, MSG_NOTFOUND, MSG_NOTFOUND_LEN, STATE_SENDWORD);
+            return;
+        }
 
         reply_job(c, j, MSG_FOUND);
         break;
     case OP_PEEKJOB:
         errno = 0;
         id = strtoull(c->cmd + CMD_PEEKJOB_LEN, &end_buf, 10);
-        if (errno) return reply_msg(c, MSG_BAD_FORMAT);
+        if (errno) {
+            reply_msg(c, MSG_BAD_FORMAT);
+            return;
+        }
         op_ct[type]++;
 
         /* So, peek is annoying, because some other connection might free the
@@ -1253,25 +1325,33 @@ dispatch_cmd(conn c)
          * then free the copy when it's done sending. */
         j = job_copy(peek_job(id));
 
-        if (!j) return reply(c, MSG_NOTFOUND, MSG_NOTFOUND_LEN, STATE_SENDWORD);
+        if (!j) {
+            reply(c, MSG_NOTFOUND, MSG_NOTFOUND_LEN, STATE_SENDWORD);
+            return;
+        }
 
         reply_job(c, j, MSG_FOUND);
         break;
     case OP_RESERVE_TIMEOUT:
         errno = 0;
         timeout = strtol(c->cmd + CMD_RESERVE_TIMEOUT_LEN, &end_buf, 10);
-        if (errno) return reply_msg(c, MSG_BAD_FORMAT);
+        if (errno) {
+            reply_msg(c, MSG_BAD_FORMAT);
+            return;
+        }
     case OP_RESERVE: /* FALLTHROUGH */
         /* don't allow trailing garbage */
         if (type == OP_RESERVE && c->cmd_len != CMD_RESERVE_LEN + 2) {
-            return reply_msg(c, MSG_BAD_FORMAT);
+            reply_msg(c, MSG_BAD_FORMAT);
+            return;
         }
 
         op_ct[type]++;
         conn_set_worker(c);
 
         if (conn_has_close_deadline(c) && !conn_ready(c)) {
-            return reply_msg(c, MSG_DEADLINE_SOON);
+            reply_msg(c, MSG_DEADLINE_SOON);
+            return;
         }
 
         /* try to get a new job for this guy */
@@ -1281,45 +1361,75 @@ dispatch_cmd(conn c)
     case OP_DELETE:
         errno = 0;
         id = strtoull(c->cmd + CMD_DELETE_LEN, &end_buf, 10);
-        if (errno) return reply_msg(c, MSG_BAD_FORMAT);
+        if (errno) {
+            reply_msg(c, MSG_BAD_FORMAT);
+            return;
+        }
         op_ct[type]++;
 
         j = job_find(id);
-        j = remove_reserved_job(c, j) ? :
-            remove_ready_job(j) ? :
-            remove_buried_job(j);
+        {
+            job res_j = remove_reserved_job(c, j);
+            if (res_j) {
+                j = res_j;
+            } else {
+                job red_j = remove_ready_job(j);
+                j = red_j ? red_j : remove_buried_job(j);
+            }
+        }
 
-        if (!j) return reply(c, MSG_NOTFOUND, MSG_NOTFOUND_LEN, STATE_SENDWORD);
+        if (!j) {
+            reply(c, MSG_NOTFOUND, MSG_NOTFOUND_LEN, STATE_SENDWORD);
+            return;
+        }
 
         j->state = JOB_STATE_INVALID;
         r = binlog_write_job(j);
         job_free(j);
 
-        if (!r) return reply_serr(c, MSG_INTERNAL_ERROR);
+        if (!r) {
+            reply_serr(c, MSG_INTERNAL_ERROR);
+            return;
+        }
 
         reply(c, MSG_DELETED, MSG_DELETED_LEN, STATE_SENDWORD);
         break;
     case OP_RELEASE:
         errno = 0;
         id = strtoull(c->cmd + CMD_RELEASE_LEN, &pri_buf, 10);
-        if (errno) return reply_msg(c, MSG_BAD_FORMAT);
+        if (errno) {
+            reply_msg(c, MSG_BAD_FORMAT);
+            return;
+        }
 
         r = read_pri(&pri, pri_buf, &delay_buf);
-        if (r) return reply_msg(c, MSG_BAD_FORMAT);
+        if (r) {
+            reply_msg(c, MSG_BAD_FORMAT);
+            return;
+        }
 
         r = read_delay(&delay, delay_buf, NULL);
-        if (r) return reply_msg(c, MSG_BAD_FORMAT);
+        if (r) {
+            reply_msg(c, MSG_BAD_FORMAT);
+            return;
+        }
         op_ct[type]++;
 
         j = remove_reserved_job(c, job_find(id));
 
-        if (!j) return reply(c, MSG_NOTFOUND, MSG_NOTFOUND_LEN, STATE_SENDWORD);
+        if (!j) {
+            reply(c, MSG_NOTFOUND, MSG_NOTFOUND_LEN, STATE_SENDWORD);
+            return;
+        }
 
         /* We want to update the delay deadline on disk, so reserve space for
          * that. */
         if (delay) {
             z = binlog_reserve_space_update(j);
-            if (!z) return reply_serr(c, MSG_OUT_OF_MEMORY);
+            if (!z) {
+                reply_serr(c, MSG_OUT_OF_MEMORY);
+                return;
+            }
             j->reserved_binlog_space += z;
         }
 
@@ -1328,9 +1438,13 @@ dispatch_cmd(conn c)
         j->release_ct++;
 
         r = enqueue_job(j, delay, !!delay);
-        if (r < 0) return reply_serr(c, MSG_INTERNAL_ERROR);
+        if (r < 0) {
+            reply_serr(c, MSG_INTERNAL_ERROR);
+            return;
+        }
         if (r == 1) {
-            return reply(c, MSG_RELEASED, MSG_RELEASED_LEN, STATE_SENDWORD);
+            reply(c, MSG_RELEASED, MSG_RELEASED_LEN, STATE_SENDWORD);
+            return;
         }
 
         /* out of memory trying to grow the queue, so it gets buried */
@@ -1340,38 +1454,59 @@ dispatch_cmd(conn c)
     case OP_BURY:
         errno = 0;
         id = strtoull(c->cmd + CMD_BURY_LEN, &pri_buf, 10);
-        if (errno) return reply_msg(c, MSG_BAD_FORMAT);
+        if (errno) {
+            reply_msg(c, MSG_BAD_FORMAT);
+            return;
+        }
 
         r = read_pri(&pri, pri_buf, NULL);
-        if (r) return reply_msg(c, MSG_BAD_FORMAT);
+        if (r) {
+            reply_msg(c, MSG_BAD_FORMAT);
+            return;
+        }
         op_ct[type]++;
 
         j = remove_reserved_job(c, job_find(id));
 
-        if (!j) return reply(c, MSG_NOTFOUND, MSG_NOTFOUND_LEN, STATE_SENDWORD);
+        if (!j) {
+            reply(c, MSG_NOTFOUND, MSG_NOTFOUND_LEN, STATE_SENDWORD);
+            return;
+        }
 
         j->pri = pri;
         r = bury_job(j, 1);
-        if (!r) return reply_serr(c, MSG_INTERNAL_ERROR);
+        if (!r) {
+            reply_serr(c, MSG_INTERNAL_ERROR);
+            return;
+        }
         reply(c, MSG_BURIED, MSG_BURIED_LEN, STATE_SENDWORD);
         break;
     case OP_KICK:
         errno = 0;
         count = strtoul(c->cmd + CMD_KICK_LEN, &end_buf, 10);
         if (end_buf == c->cmd + CMD_KICK_LEN) {
-            return reply_msg(c, MSG_BAD_FORMAT);
+            reply_msg(c, MSG_BAD_FORMAT);
+            return;
         }
-        if (errno) return reply_msg(c, MSG_BAD_FORMAT);
+        if (errno) {
+            reply_msg(c, MSG_BAD_FORMAT);
+            return;
+        }
 
         op_ct[type]++;
 
         i = kick_jobs(c->use, count);
 
-        return reply_line(c, STATE_SENDWORD, "KICKED %u\r\n", i);
+        reply_line(c, STATE_SENDWORD, "KICKED %u\r\n", i);
+        return;
     case OP_TOUCH:
         errno = 0;
         id = strtoull(c->cmd + CMD_TOUCH_LEN, &end_buf, 10);
-        if (errno) return twarn("strtoull"), reply_msg(c, MSG_BAD_FORMAT);
+        if (errno) {
+            twarn("strtoull");
+            reply_msg(c, MSG_BAD_FORMAT);
+            return;
+        }
 
         op_ct[type]++;
 
@@ -1380,13 +1515,15 @@ dispatch_cmd(conn c)
         if (j) {
             reply(c, MSG_TOUCHED, MSG_TOUCHED_LEN, STATE_SENDWORD);
         } else {
-            return reply(c, MSG_NOTFOUND, MSG_NOTFOUND_LEN, STATE_SENDWORD);
+            reply(c, MSG_NOTFOUND, MSG_NOTFOUND_LEN, STATE_SENDWORD);
+            return;
         }
         break;
     case OP_STATS:
         /* don't allow trailing garbage */
         if (c->cmd_len != CMD_STATS_LEN + 2) {
-            return reply_msg(c, MSG_BAD_FORMAT);
+            reply_msg(c, MSG_BAD_FORMAT);
+            return;
         }
 
         op_ct[type]++;
@@ -1396,24 +1533,39 @@ dispatch_cmd(conn c)
     case OP_JOBSTATS:
         errno = 0;
         id = strtoull(c->cmd + CMD_JOBSTATS_LEN, &end_buf, 10);
-        if (errno) return reply_msg(c, MSG_BAD_FORMAT);
+        if (errno) {
+            reply_msg(c, MSG_BAD_FORMAT);
+            return;
+        }
 
         op_ct[type]++;
 
         j = peek_job(id);
-        if (!j) return reply(c, MSG_NOTFOUND, MSG_NOTFOUND_LEN, STATE_SENDWORD);
+        if (!j) {
+            reply(c, MSG_NOTFOUND, MSG_NOTFOUND_LEN, STATE_SENDWORD);
+            return;
+        }
 
-        if (!j->tube) return reply_serr(c, MSG_INTERNAL_ERROR);
+        if (!j->tube) {
+            reply_serr(c, MSG_INTERNAL_ERROR);
+            return;
+        }
         do_stats(c, (fmt_fn) fmt_job_stats, j);
         break;
     case OP_STATS_TUBE:
         name = c->cmd + CMD_STATS_TUBE_LEN;
-        if (!name_is_ok(name, 200)) return reply_msg(c, MSG_BAD_FORMAT);
+        if (!name_is_ok(name, 200)) {
+            reply_msg(c, MSG_BAD_FORMAT);
+            return;
+        }
 
         op_ct[type]++;
 
         t = tube_find(name);
-        if (!t) return reply_msg(c, MSG_NOTFOUND);
+        if (!t) {
+            reply_msg(c, MSG_NOTFOUND);
+            return;
+        }
 
         do_stats(c, (fmt_fn) fmt_stats_tube, t);
         t = NULL;
@@ -1421,7 +1573,8 @@ dispatch_cmd(conn c)
     case OP_LIST_TUBES:
         /* don't allow trailing garbage */
         if (c->cmd_len != CMD_LIST_TUBES_LEN + 2) {
-            return reply_msg(c, MSG_BAD_FORMAT);
+            reply_msg(c, MSG_BAD_FORMAT);
+            return;
         }
 
         op_ct[type]++;
@@ -1430,7 +1583,8 @@ dispatch_cmd(conn c)
     case OP_LIST_TUBE_USED:
         /* don't allow trailing garbage */
         if (c->cmd_len != CMD_LIST_TUBE_USED_LEN + 2) {
-            return reply_msg(c, MSG_BAD_FORMAT);
+            reply_msg(c, MSG_BAD_FORMAT);
+            return;
         }
 
         op_ct[type]++;
@@ -1439,7 +1593,8 @@ dispatch_cmd(conn c)
     case OP_LIST_TUBES_WATCHED:
         /* don't allow trailing garbage */
         if (c->cmd_len != CMD_LIST_TUBES_WATCHED_LEN + 2) {
-            return reply_msg(c, MSG_BAD_FORMAT);
+            reply_msg(c, MSG_BAD_FORMAT);
+            return;
         }
 
         op_ct[type]++;
@@ -1447,11 +1602,17 @@ dispatch_cmd(conn c)
         break;
     case OP_USE:
         name = c->cmd + CMD_USE_LEN;
-        if (!name_is_ok(name, 200)) return reply_msg(c, MSG_BAD_FORMAT);
+        if (!name_is_ok(name, 200)) {
+            reply_msg(c, MSG_BAD_FORMAT);
+            return;
+        }
         op_ct[type]++;
 
         TUBE_ASSIGN(t, tube_find_or_make(name));
-        if (!t) return reply_serr(c, MSG_OUT_OF_MEMORY);
+        if (!t) {
+            reply_serr(c, MSG_OUT_OF_MEMORY);
+            return;
+        }
 
         c->use->using_ct--;
         TUBE_ASSIGN(c->use, t);
@@ -1462,22 +1623,34 @@ dispatch_cmd(conn c)
         break;
     case OP_WATCH:
         name = c->cmd + CMD_WATCH_LEN;
-        if (!name_is_ok(name, 200)) return reply_msg(c, MSG_BAD_FORMAT);
+        if (!name_is_ok(name, 200)) {
+            reply_msg(c, MSG_BAD_FORMAT);
+            return;
+        }
         op_ct[type]++;
 
         TUBE_ASSIGN(t, tube_find_or_make(name));
-        if (!t) return reply_serr(c, MSG_OUT_OF_MEMORY);
+        if (!t) {
+            reply_serr(c, MSG_OUT_OF_MEMORY);
+            return;
+        }
 
         r = 1;
         if (!ms_contains(&c->watch, t)) r = ms_append(&c->watch, t);
         TUBE_ASSIGN(t, NULL);
-        if (!r) return reply_serr(c, MSG_OUT_OF_MEMORY);
+        if (!r) {
+            reply_serr(c, MSG_OUT_OF_MEMORY);
+            return;
+        }
 
         reply_line(c, STATE_SENDWORD, "WATCHING %d\r\n", c->watch.used);
         break;
     case OP_IGNORE:
         name = c->cmd + CMD_IGNORE_LEN;
-        if (!name_is_ok(name, 200)) return reply_msg(c, MSG_BAD_FORMAT);
+        if (!name_is_ok(name, 200)) {
+            reply_msg(c, MSG_BAD_FORMAT);
+            return;
+        }
         op_ct[type]++;
 
         t = NULL;
@@ -1487,7 +1660,10 @@ dispatch_cmd(conn c)
             t = NULL;
         }
 
-        if (t && c->watch.used < 2) return reply_msg(c, MSG_NOT_IGNORED);
+        if (t && c->watch.used < 2) {
+            reply_msg(c, MSG_NOT_IGNORED);
+            return;
+        }
 
         if (t) ms_remove(&c->watch, t); /* may free t if refcount => 0 */
         t = NULL;
@@ -1501,14 +1677,23 @@ dispatch_cmd(conn c)
         op_ct[type]++;
 
         r = read_tube_name(&name, c->cmd + CMD_PAUSE_TUBE_LEN, &delay_buf);
-        if (r) return reply_msg(c, MSG_BAD_FORMAT);
+        if (r) {
+            reply_msg(c, MSG_BAD_FORMAT);
+            return;
+        }
 
         r = read_delay(&delay, delay_buf, NULL);
-        if (r) return reply_msg(c, MSG_BAD_FORMAT);
+        if (r) {
+            reply_msg(c, MSG_BAD_FORMAT);
+            return;
+        }
 
         *delay_buf = '\0';
         t = tube_find(name);
-        if (!t) return reply_msg(c, MSG_NOTFOUND);
+        if (!t) {
+            reply_msg(c, MSG_NOTFOUND);
+            return;
+        }
 
         t->deadline_at = now_usec() + delay;
         t->pause = delay;
@@ -1518,7 +1703,8 @@ dispatch_cmd(conn c)
         reply_line(c, STATE_SENDWORD, "PAUSED\r\n");
         break;
     default:
-        return reply_msg(c, MSG_UNKNOWN_COMMAND);
+        reply_msg(c, MSG_UNKNOWN_COMMAND);
+        return;
     }
 }
 
@@ -1557,16 +1743,22 @@ h_conn_timeout(conn c)
         r = enqueue_job(remove_this_reserved_job(c, j), 0, 0);
         if (r < 1) bury_job(j, 0); /* out of memory, so bury it */
         r = conn_update_evq(c, c->evq.ev_events);
-        if (r == -1) return twarnx("conn_update_evq() failed"), conn_close(c);
+        if (r == -1) {
+            twarnx("conn_update_evq() failed");
+            conn_close(c);
+            return;
+        }
     }
 
     if (should_timeout) {
         dprintf("conn_waiting(%p) = %d\n", c, conn_waiting(c));
-        return reply_msg(remove_waiting_conn(c), MSG_DEADLINE_SOON);
+        reply_msg(remove_waiting_conn(c), MSG_DEADLINE_SOON);
+        return;
     } else if (conn_waiting(c) && c->pending_timeout >= 0) {
         dprintf("conn_waiting(%p) = %d\n", c, conn_waiting(c));
         c->pending_timeout = -1;
-        return reply_msg(remove_waiting_conn(c), MSG_TIMED_OUT);
+        reply_msg(remove_waiting_conn(c), MSG_TIMED_OUT);
+        return;
     }
 }
 
@@ -1589,7 +1781,11 @@ reset_conn(conn c)
     int r;
 
     r = conn_update_evq(c, EV_READ | EV_PERSIST);
-    if (r == -1) return twarnx("update events failed"), conn_close(c);
+    if (r == -1) {
+        twarnx("update events failed");
+        conn_close(c);
+        return;
+    }
 
     /* was this a peek or stats command? */
     if (c->out_job && c->out_job->state == JOB_STATE_COPY) job_free(c->out_job);
@@ -1609,22 +1805,32 @@ h_conn_data(conn c)
     switch (c->state) {
     case STATE_WANTCOMMAND:
         r = read(c->fd, c->cmd + c->cmd_read, LINE_BUF_SIZE - c->cmd_read);
-        if (r == -1) return check_err(c, "read()");
-        if (r == 0) return conn_close(c); /* the client hung up */
+        if (r == -1) {
+            check_err(c, "read()");
+            return;
+        }
+        if (r == 0) {
+            conn_close(c); /* the client hung up */
+            return;
+        }
 
         c->cmd_read += r; /* we got some bytes */
 
         c->cmd_len = cmd_len(c); /* find the EOL */
 
         /* yay, complete command line */
-        if (c->cmd_len) return do_cmd(c);
+        if (c->cmd_len) {
+            do_cmd(c);
+            return;
+        }
 
         /* c->cmd_read > LINE_BUF_SIZE can't happen */
 
         /* command line too long? */
         if (c->cmd_read == LINE_BUF_SIZE) {
             c->cmd_read = 0; /* discard the input so far */
-            return reply_msg(c, MSG_BAD_FORMAT);
+            reply_msg(c, MSG_BAD_FORMAT);
+            return;
         }
 
         /* otherwise we have an incomplete line, so just keep waiting */
@@ -1634,21 +1840,36 @@ h_conn_data(conn c)
          * counts the bytes that remain to be thrown away. */
         to_read = min(c->in_job_read, BUCKET_BUF_SIZE);
         r = read(c->fd, bucket, to_read);
-        if (r == -1) return check_err(c, "read()");
-        if (r == 0) return conn_close(c); /* the client hung up */
+        if (r == -1) {
+            check_err(c, "read()");
+            return;
+        }
+        if (r == 0) {
+            conn_close(c); /* the client hung up */
+            return;
+        }
 
         c->in_job_read -= r; /* we got some bytes */
 
         /* (c->in_job_read < 0) can't happen */
 
-        if (c->in_job_read == 0) return reply_serr(c, MSG_OUT_OF_MEMORY);
+        if (c->in_job_read == 0) {
+            reply_serr(c, MSG_OUT_OF_MEMORY);
+            return;
+        }
         break;
     case STATE_WANTDATA:
         j = c->in_job;
 
         r = read(c->fd, j->body + c->in_job_read, j->body_size -c->in_job_read);
-        if (r == -1) return check_err(c, "read()");
-        if (r == 0) return conn_close(c); /* the client hung up */
+        if (r == -1) {
+            check_err(c, "read()");
+            return;
+        }
+        if (r == 0) {
+            conn_close(c); /* the client hung up */
+            return;
+        }
 
         c->in_job_read += r; /* we got some bytes */
 
@@ -1658,14 +1879,23 @@ h_conn_data(conn c)
         break;
     case STATE_SENDWORD:
         r= write(c->fd, c->reply + c->reply_sent, c->reply_len - c->reply_sent);
-        if (r == -1) return check_err(c, "write()");
-        if (r == 0) return conn_close(c); /* the client hung up */
+        if (r == -1) {
+            check_err(c, "write()");
+            return;
+        }
+        if (r == 0) {
+            conn_close(c); /* the client hung up */
+            return;
+        }
 
         c->reply_sent += r; /* we got some bytes */
 
         /* (c->reply_sent > c->reply_len) can't happen */
 
-        if (c->reply_sent == c->reply_len) return reset_conn(c);
+        if (c->reply_sent == c->reply_len) {
+            reset_conn(c);
+            return;
+        }
 
         /* otherwise we sent an incomplete reply, so just keep waiting */
         break;
@@ -1678,8 +1908,14 @@ h_conn_data(conn c)
         iov[1].iov_len = j->body_size - c->out_job_sent;
 
         r = writev(c->fd, iov, 2);
-        if (r == -1) return check_err(c, "writev()");
-        if (r == 0) return conn_close(c); /* the client hung up */
+        if (r == -1) {
+            check_err(c, "writev()");
+            return;
+        }
+        if (r == 0) {
+            conn_close(c); /* the client hung up */
+            return;
+        }
 
         /* update the sent values */
         c->reply_sent += r;
@@ -1691,7 +1927,10 @@ h_conn_data(conn c)
         /* (c->out_job_sent > j->body_size) can't happen */
 
         /* are we done? */
-        if (c->out_job_sent == j->body_size) return reset_conn(c);
+        if (c->out_job_sent == j->body_size) {
+            reset_conn(c);
+            return;
+        }
 
         /* otherwise we sent incomplete data, so just keep waiting */
         break;
@@ -1700,8 +1939,14 @@ h_conn_data(conn c)
         if (LINE_BUF_SIZE - c->cmd_read < 1) break;
 
         r = read(c->fd, c->cmd + c->cmd_read, LINE_BUF_SIZE - c->cmd_read);
-        if (r == -1) return check_err(c, "read()");
-        if (r == 0) return conn_close(c); /* the client hung up */
+        if (r == -1) {
+            check_err(c, "read()");
+            return;
+        }
+        if (r == 0) {
+            conn_close(c); /* the client hung up */
+            return;
+        }
         c->cmd_read += r; /* we got some bytes */
     }
 }
@@ -1715,7 +1960,8 @@ h_conn(const int fd, const short which, conn c)
     if (fd != c->fd) {
         twarnx("Argh! event fd doesn't match conn fd.");
         close(fd);
-        return conn_close(c);
+        conn_close(c);
+        return;
     }
 
     switch (which) {
@@ -1773,7 +2019,10 @@ h_accept(const int fd, const short which, struct event *ev)
     socklen_t addrlen;
     struct sockaddr addr;
 
-    if (which == EV_TIMEOUT) return h_delay();
+    if (which == EV_TIMEOUT) {
+        h_delay();
+        return;
+    }
 
     addrlen = sizeof addr;
     cfd = accept(fd, &addr, &addrlen);
@@ -1784,17 +2033,37 @@ h_accept(const int fd, const short which, struct event *ev)
     }
 
     flags = fcntl(cfd, F_GETFL, 0);
-    if (flags < 0) return twarn("getting flags"), close(cfd), v();
+    if (flags < 0) {
+        twarn("getting flags");
+        close(cfd);
+        v();
+        return;
+    }
 
     r = fcntl(cfd, F_SETFL, flags | O_NONBLOCK);
-    if (r < 0) return twarn("setting O_NONBLOCK"), close(cfd), v();
+    if (r < 0) {
+        twarn("setting O_NONBLOCK");
+        close(cfd);
+        v();
+        return;
+    }
 
     c = make_conn(cfd, STATE_WANTCOMMAND, default_tube, default_tube);
-    if (!c) return twarnx("make_conn() failed"), close(cfd), brake();
+    if (!c) {
+        twarnx("make_conn() failed");
+        close(cfd);
+        brake();
+        return;
+    }
 
     dprintf("accepted conn, fd=%d\n", cfd);
     r = conn_set_evq(c, EV_READ | EV_PERSIST, (evh) h_conn);
-    if (r == -1) return twarnx("conn_set_evq() failed"), close(cfd), brake();
+    if (r == -1) {
+        twarnx("conn_set_evq() failed");
+        close(cfd);
+        brake();
+        return;
+    }
 }
 
 void

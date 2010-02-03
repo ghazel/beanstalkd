@@ -88,7 +88,7 @@ unbrake(evh h)
     if (after_startup) twarnx("releasing the brakes");
     after_startup = 1;
 
-    accept_handler = h ? : accept_handler;
+    accept_handler = h ? h : accept_handler;
     event_set(&listen_evq, listen_socket, EV_READ | EV_PERSIST,
               accept_handler, &listen_evq);
 

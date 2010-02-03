@@ -47,7 +47,7 @@ static void
 pq_grow(pq q)
 {
     job *nheap;
-    unsigned int ncap = q->cap << 1 ? : 1;
+    unsigned int ncap = q->cap << 1 ? q->cap << 1 : 1;
 
     nheap = malloc(ncap * sizeof(job));
     if (!nheap) return;
